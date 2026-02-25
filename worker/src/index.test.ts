@@ -112,6 +112,20 @@ describe("directory listing", () => {
   });
 });
 
+describe("trailing slash redirect", () => {
+  it("redirects to trailing slash when path is a directory", async () => {
+    await env.BUCKET.put("btc-updown-5m/1771998000/event.json", "{}");
+
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(request("/btc-updown-5m/1771998000"), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(301);
+    expect(res.headers.get("Location")).toBe(
+      "https://polyticker.example.com/btc-updown-5m/1771998000/"
+    );
+  });
+});
+
 describe("file serving", () => {
   it("serves files with correct content type and CORS", async () => {
     await env.BUCKET.put("test/data.json", '{"hello":"world"}');

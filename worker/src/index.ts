@@ -30,6 +30,11 @@ export default {
     // File serving
     const object = await env.BUCKET.get(path);
     if (!object) {
+      // Path might be a directory without trailing slash — try listing it
+      const probe = await env.BUCKET.list({ prefix: path + "/", delimiter: "/", limit: 1 });
+      if (probe.objects.length > 0 || (probe.delimitedPrefixes || []).length > 0) {
+        return Response.redirect(new URL(url.pathname + "/", url.origin).toString(), 301);
+      }
       return jsonError("not_found", "Object not found", 404);
     }
 
