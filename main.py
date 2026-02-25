@@ -1,3 +1,4 @@
+import os
 import signal
 import sys
 
@@ -15,7 +16,14 @@ def main():
     rtds.start()
     logger.info("[main] RTDS started")
 
-    collector = Collector(rtds, DATA_DIR)
+    storage = None
+    if os.environ.get("R2_ENDPOINT"):
+        from storage import R2
+
+        storage = R2()
+        logger.info("[main] R2 storage enabled")
+
+    collector = Collector(rtds, DATA_DIR, storage=storage)
 
     def shutdown(sig, frame):
         logger.info("[main] shutting down...")
