@@ -8,46 +8,75 @@ export default {
     const path = decodeURIComponent(url.pathname).slice(1); // strip leading /
 
     if (request.method !== "GET") {
-      return new Response("Method not allowed", { status: 405 });
+      return jsonError("method_not_allowed", "Only GET requests are supported", 405);
     }
 
     // Directory listing
     if (path === "" || path.endsWith("/")) {
-      return listDirectory(env.BUCKET, path);
+      const data = await listDirectoryData(env.BUCKET, path);
+      if (wantsHtml(request)) {
+        return cors(renderHtml(data));
+      }
+      return cors(
+        new Response(JSON.stringify(data), {
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "public, max-age=300",
+          },
+        })
+      );
     }
 
     // File serving
     const object = await env.BUCKET.get(path);
     if (!object) {
-      return new Response("Not found", { status: 404 });
+      return jsonError("not_found", "Object not found", 404);
     }
 
-    return new Response(object.body, {
-      headers: {
-        "Content-Type": contentType(path),
-        "Content-Length": object.size.toString(),
-        "Cache-Control": "public, max-age=86400",
-      },
-    });
+    return cors(
+      new Response(object.body, {
+        headers: {
+          "Content-Type": contentType(path),
+          "Content-Length": object.size.toString(),
+          "Cache-Control": "public, max-age=86400",
+        },
+      })
+    );
   },
 } satisfies ExportedHandler<Env>;
 
-async function listDirectory(
-  bucket: R2Bucket,
-  prefix: string
-): Promise<Response> {
+async function listDirectoryData(bucket: R2Bucket, prefix: string) {
   const listed = await bucket.list({ prefix, delimiter: "/" });
 
-  const dirs = (listed.delimitedPrefixes || []).map((p) => {
-    const name = p.slice(prefix.length);
-    return `<li><a href="/${p}">${name}</a></li>`;
-  });
+  const directories = (listed.delimitedPrefixes || []).map((p) => ({
+    name: p.slice(prefix.length).replace(/\/$/, ""),
+    path: `/${p}`,
+  }));
 
-  const files = listed.objects.map((obj) => {
-    const name = obj.key.slice(prefix.length);
-    const size = formatSize(obj.size);
-    return `<li><a href="/${obj.key}">${name}</a> <span>${size}</span></li>`;
-  });
+  const files = listed.objects.map((obj) => ({
+    name: obj.key.slice(prefix.length),
+    path: `/${obj.key}`,
+    size: obj.size,
+  }));
+
+  return { path: `/${prefix}`, directories, files };
+}
+
+function renderHtml(data: {
+  path: string;
+  directories: { name: string; path: string }[];
+  files: { name: string; path: string; size: number }[];
+}): Response {
+  const prefix = data.path.slice(1); // strip leading /
+
+  const dirs = data.directories.map(
+    (d) => `<li><a href="${d.path}">${d.name}/</a></li>`
+  );
+
+  const files = data.files.map(
+    (f) =>
+      `<li><a href="${f.path}">${f.name}</a> <span>${formatSize(f.size)}</span></li>`
+  );
 
   const parent = prefix
     ? `<li><a href="/${prefix.split("/").slice(0, -2).join("/") + (prefix.split("/").length > 2 ? "/" : "")}">..</a></li>`
@@ -76,8 +105,16 @@ async function listDirectory(
 </html>`;
 
   return new Response(html, {
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "public, max-age=300",
+    },
   });
+}
+
+function wantsHtml(request: Request): boolean {
+  const accept = request.headers.get("Accept") || "";
+  return accept.includes("text/html");
 }
 
 function contentType(key: string): string {
@@ -90,4 +127,18 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function cors(response: Response): Response {
+  response.headers.set("Access-Control-Allow-Origin", "*");
+  return response;
+}
+
+function jsonError(error: string, message: string, status: number): Response {
+  return cors(
+    new Response(JSON.stringify({ error, message, status }), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    })
+  );
 }
