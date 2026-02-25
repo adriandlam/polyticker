@@ -50,5 +50,8 @@ coverage.xml
 # Worktrees
 .worktrees/
 
+# Node
+node_modules/
+
 # Claude
 .claude/
