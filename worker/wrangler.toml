@@ -1,0 +1,8 @@
+name = "polyticker"
+account_id = "131540e25fac1d3472327f46f00e6a50"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "polyticker"
