@@ -8,27 +8,29 @@ export default {
     const path = decodeURIComponent(url.pathname).slice(1); // strip leading /
 
     if (request.method !== "GET") {
-      return new Response("Method not allowed", { status: 405 });
+      return jsonError("method_not_allowed", "Only GET requests are supported", 405);
     }
 
     // Directory listing
     if (path === "" || path.endsWith("/")) {
-      return listDirectory(env.BUCKET, path);
+      return cors(await listDirectory(env.BUCKET, path));
     }
 
     // File serving
     const object = await env.BUCKET.get(path);
     if (!object) {
-      return new Response("Not found", { status: 404 });
+      return jsonError("not_found", "Object not found", 404);
     }
 
-    return new Response(object.body, {
-      headers: {
-        "Content-Type": contentType(path),
-        "Content-Length": object.size.toString(),
-        "Cache-Control": "public, max-age=86400",
-      },
-    });
+    return cors(
+      new Response(object.body, {
+        headers: {
+          "Content-Type": contentType(path),
+          "Content-Length": object.size.toString(),
+          "Cache-Control": "public, max-age=86400",
+        },
+      })
+    );
   },
 } satisfies ExportedHandler<Env>;
 
@@ -90,4 +92,18 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function cors(response: Response): Response {
+  response.headers.set("Access-Control-Allow-Origin", "*");
+  return response;
+}
+
+function jsonError(error: string, message: string, status: number): Response {
+  return cors(
+    new Response(JSON.stringify({ error, message, status }), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    })
+  );
 }
