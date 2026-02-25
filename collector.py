@@ -50,10 +50,11 @@ def fetch_event(slug, retries=6, delay=10):
 
 
 class Collector:
-    def __init__(self, rtds, data_dir):
+    def __init__(self, rtds, data_dir, storage=None):
         self.rtds = rtds
         self.data_dir = Path(data_dir) / "btc-updown-5m"
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.storage = storage
         self._current_market_ch = None
 
     def run(self):
@@ -116,6 +117,13 @@ class Collector:
         # Stop MarketChannel
         if market_ch:
             market_ch.stop()
+
+        # Upload to R2 and clean up local copy
+        if self.storage:
+            try:
+                self.storage.upload_interval(market_dir, self.data_dir.parent)
+            except Exception as e:
+                logger.error(f"[r2] upload failed for {interval_epoch}: {e}")
 
     def _current_epoch(self):
         now = time.time()
