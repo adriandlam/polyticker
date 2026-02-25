@@ -111,3 +111,18 @@ describe("directory listing", () => {
     expect(file!.size).toBeGreaterThan(0);
   });
 });
+
+describe("file serving", () => {
+  it("serves files with correct content type and CORS", async () => {
+    await env.BUCKET.put("test/data.json", '{"hello":"world"}');
+
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(request("/test/data.json"), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/json");
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=86400");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(await res.json()).toEqual({ hello: "world" });
+  });
+});
