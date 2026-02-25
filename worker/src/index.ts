@@ -1,3 +1,5 @@
+import { generateDailyArchive } from "./archive";
+
 interface Env {
   BUCKET: R2Bucket;
 }
@@ -7,8 +9,8 @@ export default {
     const url = new URL(request.url);
     const path = decodeURIComponent(url.pathname).slice(1); // strip leading /
 
-    if (request.method !== "GET") {
-      return jsonError("method_not_allowed", "Only GET requests are supported", 405);
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return jsonError("method_not_allowed", "Only GET and HEAD requests are supported", 405);
     }
 
     // Directory listing
@@ -47,6 +49,14 @@ export default {
         },
       })
     );
+  },
+
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const yesterday = new Date(event.scheduledTime);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    const date = yesterday.toISOString().slice(0, 10);
+
+    ctx.waitUntil(generateDailyArchive(env.BUCKET, "btc-updown-5m", date));
   },
 } satisfies ExportedHandler<Env>;
 

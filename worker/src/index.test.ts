@@ -28,8 +28,18 @@ describe("CORS", () => {
   });
 });
 
+describe("HEAD requests", () => {
+  it("responds to HEAD requests", async () => {
+    const req = new Request("https://polyticker.example.com/", { method: "HEAD" });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(req, env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("JSON errors", () => {
-  it("returns JSON 405 for non-GET methods", async () => {
+  it("returns JSON 405 for non-GET/HEAD methods", async () => {
     const req = new Request("https://polyticker.example.com/", { method: "POST" });
     const ctx = createExecutionContext();
     const res = await worker.fetch(req, env, ctx);
@@ -38,6 +48,7 @@ describe("JSON errors", () => {
     expect(res.headers.get("Content-Type")).toBe("application/json");
     const body = await res.json() as { error: string; message: string; status: number };
     expect(body.error).toBe("method_not_allowed");
+    expect(body.message).toBe("Only GET and HEAD requests are supported");
     expect(body.status).toBe(405);
   });
 
