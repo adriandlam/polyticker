@@ -13,6 +13,66 @@ export default {
       return jsonError("method_not_allowed", "Only GET and HEAD requests are supported", 405);
     }
 
+    // Archive routes
+    if (path.startsWith("archives/")) {
+      // Archive market listing: /archives/btc-updown-5m/
+      if (path.endsWith("/")) {
+        const market = path.slice("archives/".length).replace(/\/$/, "");
+
+        if (!market) {
+          // GET /archives/ — list markets that have archives
+          const data = await listDirectoryData(env.BUCKET, "archives/");
+          return cors(
+            new Response(JSON.stringify(data), {
+              headers: {
+                "Content-Type": "application/json",
+                "Cache-Control": "public, max-age=300",
+              },
+            })
+          );
+        }
+
+        // GET /archives/<market>/ — list daily archives
+        const listed = await env.BUCKET.list({ prefix: `archives/${market}/` });
+        let archives = listed.objects.map((obj) => {
+          const name = obj.key.split("/").pop()!;
+          const date = name.replace(".tar.gz", "");
+          return { name, path: `/${obj.key}`, date, size: obj.size };
+        });
+
+        const from = url.searchParams.get("from");
+        const to = url.searchParams.get("to");
+        if (from) archives = archives.filter((a) => a.date >= from);
+        if (to) archives = archives.filter((a) => a.date <= to);
+
+        return cors(
+          new Response(JSON.stringify({ path: `/${path}`, archives }), {
+            headers: {
+              "Content-Type": "application/json",
+              "Cache-Control": "public, max-age=300",
+            },
+          })
+        );
+      }
+
+      // Archive file serving: /archives/<market>/YYYY-MM-DD.tar.gz
+      if (path.endsWith(".tar.gz")) {
+        const object = await env.BUCKET.get(path);
+        if (!object) {
+          return jsonError("not_found", "Archive not found", 404);
+        }
+        return cors(
+          new Response(object.body, {
+            headers: {
+              "Content-Type": "application/gzip",
+              "Content-Length": object.size.toString(),
+              "Cache-Control": "public, max-age=31536000, immutable",
+            },
+          })
+        );
+      }
+    }
+
     // Directory listing
     if (path === "" || path.endsWith("/")) {
       const data = await listDirectoryData(env.BUCKET, path);
@@ -133,6 +193,7 @@ function wantsHtml(request: Request): boolean {
 }
 
 function contentType(key: string): string {
+  if (key.endsWith(".tar.gz")) return "application/gzip";
   if (key.endsWith(".json")) return "application/json";
   if (key.endsWith(".jsonl")) return "application/x-ndjson";
   return "application/octet-stream";
