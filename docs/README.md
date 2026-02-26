@@ -4,46 +4,48 @@ Historical [Polymarket](https://polymarket.com) BTC up/down 5-minute prediction 
 
 ## Download archives
 
-Daily tar.gz archives are available via the REST API:
+Per-interval tar.gz archives are available via the REST API:
 
 ```bash
-# List available archives
-curl -s https://polyticker.example.com/archives/btc-updown-5m/ | jq .
+# List all available archives (returns JSON with epoch, url, size)
+curl -s -H "Accept: application/gzip" https://polyticker.adriandlam.com/btc-updown-5m/ | jq .
 
-# Download a specific day
-curl -O https://polyticker.example.com/archives/btc-updown-5m/2026-02-25.tar.gz
+# Filter by epoch range
+curl -s -H "Accept: application/gzip" "https://polyticker.adriandlam.com/btc-updown-5m/?from=1771995300&to=1772081400" | jq .
 
-# Filter by date range
-curl -s "https://polyticker.example.com/archives/btc-updown-5m/?from=2026-02-01&to=2026-02-07" | jq .
+# Download a single interval
+curl -O https://polyticker.adriandlam.com/btc-updown-5m/1771995300.tar.gz
+
+# Check interval metadata (without downloading the archive)
+curl -s https://polyticker.adriandlam.com/btc-updown-5m/1771995300.meta.json | jq .
 ```
 
-Each archive contains ~288 five-minute intervals:
+Each archive contains one 5-minute interval (flattened):
 
 ```
-2026-02-25/
-├── 1740441600/
-│   ├── event.json          # Market metadata (Gamma API)
-│   ├── meta.json           # Collection health
-│   └── raw/
-│       ├── chainlink.jsonl # Chainlink BTC/USD oracle prices
-│       ├── binance.jsonl   # Binance BTCUSDT prices
-│       └── market.jsonl    # CLOB order book events
-├── 1740441900/
-│   └── ...
-└── ...
+1771995300.tar.gz
+├── event.json          # Market metadata (Gamma API)
+├── chainlink.jsonl     # Chainlink BTC/USD oracle prices
+├── binance.jsonl       # Binance BTCUSDT prices
+└── market.jsonl        # CLOB order book events
 ```
+
+Sidecar `{epoch}.meta.json` contains collection health (completeness, gaps).
 
 ## REST API
 
-Fetch individual intervals programmatically:
-
 ```bash
-# List all intervals
-curl -s https://polyticker.example.com/btc-updown-5m/ | jq .
+# List available markets
+curl -s https://polyticker.adriandlam.com/ | jq .
 
-# Fetch a specific interval's files
-curl -s https://polyticker.example.com/btc-updown-5m/1740441600/event.json | jq .
-curl -s https://polyticker.example.com/btc-updown-5m/1740441600/raw/market.jsonl
+# List archives with sizes
+curl -s -H "Accept: application/gzip" https://polyticker.adriandlam.com/btc-updown-5m/ | jq .
+
+# Download an archive
+curl -O https://polyticker.adriandlam.com/btc-updown-5m/1771995300.tar.gz
+
+# Fetch metadata
+curl -s https://polyticker.adriandlam.com/btc-updown-5m/1771995300.meta.json | jq .
 ```
 
 All endpoints return JSON by default. Add `Accept: text/html` for browser-friendly directory listings. CORS is enabled (`*`).
@@ -54,4 +56,4 @@ See the [main README](../README.md#data-schema) for full schema documentation co
 
 ## Backtest example
 
-See [`examples/backtest.py`](examples/backtest.py) for a complete example that downloads an archive, extracts it, replays intervals chronologically, and computes basic P&L.
+See [`examples/backtest.py`](examples/backtest.py) for a complete example that downloads archives, replays intervals chronologically, and computes basic P&L.
