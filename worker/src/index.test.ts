@@ -152,80 +152,156 @@ describe("file serving", () => {
   });
 });
 
-describe("archive endpoints", () => {
+describe("tar.gz content negotiation", () => {
   beforeEach(async () => {
-    await env.BUCKET.put("archives/btc-updown-5m/2025-02-24.tar.gz", "fake-archive-24");
-    await env.BUCKET.put("archives/btc-updown-5m/2025-02-25.tar.gz", "fake-archive-25");
-    await env.BUCKET.put("archives/btc-updown-5m/2025-02-26.tar.gz", "fake-archive-26");
+    const prefix = "btc-updown-5m";
+    await env.BUCKET.put(`${prefix}/1740441600/event.json`, '{"test":1}');
+    await env.BUCKET.put(`${prefix}/1740441600/meta.json`, '{"complete":true}');
+    await env.BUCKET.put(`${prefix}/1740441900/event.json`, '{"test":2}');
+    await env.BUCKET.put(`${prefix}/1740441900/meta.json`, '{"complete":true}');
+    await env.BUCKET.put(`${prefix}/1740442200/event.json`, '{"test":3}');
+    await env.BUCKET.put(`${prefix}/1740442200/meta.json`, '{"complete":true}');
   });
 
-  it("GET /archives/ lists markets with archives", async () => {
-    const ctx = createExecutionContext();
-    const res = await worker.fetch(request("/archives/"), env, ctx);
-    await waitOnExecutionContext(ctx);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("Content-Type")).toBe("application/json");
-    const body = await res.json() as { path: string; directories: { name: string }[] };
-    expect(body.path).toBe("/archives/");
-    expect(body.directories).toContainEqual(
-      expect.objectContaining({ name: "btc-updown-5m" })
-    );
-  });
-
-  it("GET /archives/btc-updown-5m/ lists all daily archives", async () => {
-    const ctx = createExecutionContext();
-    const res = await worker.fetch(request("/archives/btc-updown-5m/"), env, ctx);
-    await waitOnExecutionContext(ctx);
-    expect(res.status).toBe(200);
-    const body = await res.json() as {
-      path: string;
-      archives: { name: string; path: string; date: string; size: number }[];
-    };
-    expect(body.path).toBe("/archives/btc-updown-5m/");
-    expect(body.archives).toHaveLength(3);
-    expect(body.archives[0]).toMatchObject({
-      name: "2025-02-24.tar.gz",
-      date: "2025-02-24",
-    });
-  });
-
-  it("filters archives by date range with from/to params", async () => {
+  it("returns tar.gz with correct headers when Accept: application/gzip", async () => {
     const ctx = createExecutionContext();
     const res = await worker.fetch(
-      request("/archives/btc-updown-5m/?from=2025-02-25&to=2025-02-25"),
-      env,
-      ctx
-    );
-    await waitOnExecutionContext(ctx);
-    const body = await res.json() as { archives: { date: string }[] };
-    expect(body.archives).toHaveLength(1);
-    expect(body.archives[0].date).toBe("2025-02-25");
-  });
-
-  it("serves archive files with correct headers", async () => {
-    const ctx = createExecutionContext();
-    const res = await worker.fetch(
-      request("/archives/btc-updown-5m/2025-02-25.tar.gz"),
+      request("/btc-updown-5m/", { Accept: "application/gzip" }),
       env,
       ctx
     );
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("application/gzip");
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    expect(res.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="btc-updown-5m.tar.gz"'
+    );
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=86400");
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
-    // Consume the body to avoid isolated storage issues
-    await res.arrayBuffer();
+
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    // gzip magic bytes
+    expect(bytes[0]).toBe(0x1f);
+    expect(bytes[1]).toBe(0x8b);
   });
 
-  it("returns 404 for missing archives", async () => {
+  it("returns filtered tar.gz with from/to query params", async () => {
     const ctx = createExecutionContext();
     const res = await worker.fetch(
-      request("/archives/btc-updown-5m/2020-01-01.tar.gz"),
+      request("/btc-updown-5m/?from=1740441600&to=1740441900", {
+        Accept: "application/gzip",
+      }),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/gzip");
+    expect(res.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="btc-updown-5m_1740441600_1740441900.tar.gz"'
+    );
+
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes[0]).toBe(0x1f);
+    expect(bytes[1]).toBe(0x8b);
+  });
+
+  it("returns 413 when more than 288 intervals", async () => {
+    for (let i = 0; i < 289; i++) {
+      const epoch = 1700000000 + i * 300;
+      await env.BUCKET.put(`btc-updown-5m/${epoch}/event.json`, "{}");
+    }
+
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/btc-updown-5m/", { Accept: "application/gzip" }),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("range_too_large");
+  });
+
+  it("returns 400 for non-integer from/to params", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/btc-updown-5m/?from=abc&to=123", {
+        Accept: "application/gzip",
+      }),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("bad_request");
+  });
+
+  it("returns 404 for nonexistent directory", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/nonexistent/", { Accept: "application/gzip" }),
       env,
       ctx
     );
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(404);
+  });
+
+  it("returns JSON when Accept header is not application/gzip", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(request("/btc-updown-5m/"), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/json");
+    const body = (await res.json()) as { path: string };
+    expect(body.path).toBe("/btc-updown-5m/");
+  });
+
+  it("returns 400 when only from is provided", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/btc-updown-5m/?from=1740441600", {
+        Accept: "application/gzip",
+      }),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when from > to", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/btc-updown-5m/?from=1740441900&to=1740441600", {
+        Accept: "application/gzip",
+      }),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns tar.gz for a single interval directory", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/btc-updown-5m/1740441600/", { Accept: "application/gzip" }),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/gzip");
+    expect(res.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="btc-updown-5m-1740441600.tar.gz"'
+    );
+
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes[0]).toBe(0x1f);
+    expect(bytes[1]).toBe(0x8b);
   });
 });
