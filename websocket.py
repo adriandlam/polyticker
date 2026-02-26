@@ -3,7 +3,6 @@ import threading
 import time
 
 from loguru import logger
-from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
 
 
@@ -33,18 +32,26 @@ class GapTracker:
 
     def gaps_in_range(self, start_ms, end_ms):
         with self._lock:
-            return [g for g in self._gaps if g["to"] > start_ms and g["from"] < end_ms]
+            result = [
+                g for g in self._gaps if g["to"] > start_ms and g["from"] < end_ms
+            ]
+            # Include ongoing disconnection (never reconnected)
+            if self._disconnect_ts is not None and self._disconnect_ts < end_ms:
+                result.append({"from": self._disconnect_ts, "to": end_ms})
+            return result
 
 
 class WebSocket:
     RECONNECT_BASE = 1
     RECONNECT_MAX = 30
     PING_INTERVAL = 5  # seconds
+    STALE_TIMEOUT = 60  # force reconnect if no message received in N seconds
 
     def __init__(self, url):
         self.url = url
         self.gaps = GapTracker()
         self._stop = threading.Event()
+        self._last_message_time = 0.0
 
     def subscribe(self, ws):
         """Send subscription message(s). Override in subclass."""
@@ -60,18 +67,30 @@ class WebSocket:
                     self.gaps.on_connect()
                     logger.info(f"[ws] connected to {self.url}")
                     backoff = self.RECONNECT_BASE
+                    self._last_message_time = time.time()
                     self.subscribe(ws)
                     while not self._stop.is_set():
                         try:
                             raw = ws.recv(timeout=1)
                         except TimeoutError:
+                            if (
+                                self.STALE_TIMEOUT
+                                and time.time() - self._last_message_time
+                                > self.STALE_TIMEOUT
+                            ):
+                                logger.warning(
+                                    f"[ws] no data for {self.STALE_TIMEOUT}s, "
+                                    f"forcing reconnect to {self.url}"
+                                )
+                                break
                             continue
+                        self._last_message_time = time.time()
                         try:
                             message = json.loads(raw)
                         except json.JSONDecodeError:
                             continue
                         self.on_message(message)
-            except (ConnectionClosed, OSError) as e:
+            except Exception as e:
                 self.gaps.on_disconnect()
                 if self._stop.is_set():
                     break
@@ -163,6 +182,8 @@ class RTDS(WebSocket):
 
 
 class MarketChannel(WebSocket):
+    STALE_TIMEOUT = 0  # disable — market activity can be bursty
+
     def __init__(self, url, raw_dir, token_ids):
         super().__init__(url)
         self.raw_dir = raw_dir
