@@ -1,33 +1,48 @@
 import { describe, it, expect } from "vitest";
-import { createTarGz } from "./tar";
+import { tarHeader } from "./tar";
 
-describe("createTarGz", () => {
-  it("produces a valid gzip stream from file entries", async () => {
-    const files = [
-      { name: "hello.txt", data: new TextEncoder().encode("hello world") },
-    ];
-
-    const blob = await createTarGz(files);
-    expect(blob.size).toBeGreaterThan(0);
-
-    // Gzip magic number: 1f 8b
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    expect(bytes[0]).toBe(0x1f);
-    expect(bytes[1]).toBe(0x8b);
+describe("tarHeader", () => {
+  it("produces a 512-byte POSIX tar header", () => {
+    const header = tarHeader("hello.txt", 11);
+    expect(header.length).toBe(512);
   });
 
-  it("includes multiple files", async () => {
-    const files = [
-      { name: "a.txt", data: new TextEncoder().encode("aaa") },
-      { name: "dir/b.txt", data: new TextEncoder().encode("bbb") },
-    ];
-
-    const blob = await createTarGz(files);
-    expect(blob.size).toBeGreaterThan(0);
+  it("encodes filename at offset 0", () => {
+    const header = tarHeader("hello.txt", 0);
+    const name = new TextDecoder().decode(header.slice(0, 9));
+    expect(name).toBe("hello.txt");
   });
 
-  it("handles empty file list", async () => {
-    const blob = await createTarGz([]);
-    expect(blob.size).toBeGreaterThan(0);
+  it("encodes file size in octal at offset 124", () => {
+    const header = tarHeader("test.txt", 1024);
+    const sizeStr = new TextDecoder().decode(header.slice(124, 135));
+    expect(sizeStr).toBe("00000002000"); // 1024 in octal
+  });
+
+  it("sets USTAR magic at offset 257", () => {
+    const header = tarHeader("a.txt", 0);
+    const magic = new TextDecoder().decode(header.slice(257, 263));
+    expect(magic).toBe("ustar\0");
+  });
+
+  it("sets type flag to regular file (0x30)", () => {
+    const header = tarHeader("a.txt", 0);
+    expect(header[156]).toBe(0x30);
+  });
+
+  it("computes a valid checksum", () => {
+    const header = tarHeader("test.txt", 42);
+    // Re-compute: treat checksum field (148-155) as spaces, sum all bytes
+    let expected = 0;
+    for (let i = 0; i < 512; i++) {
+      if (i >= 148 && i < 156) {
+        expected += 0x20;
+      } else {
+        expected += header[i];
+      }
+    }
+    const checksumStr = new TextDecoder().decode(header.slice(148, 154));
+    const actual = parseInt(checksumStr, 8);
+    expect(actual).toBe(expected);
   });
 });
