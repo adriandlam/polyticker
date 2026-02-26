@@ -1,5 +1,5 @@
 """
-Example backtest: download a daily archive, replay all intervals, and compute
+Example backtest: download per-interval archives, replay all intervals, and compute
 basic P&L for a naive "always bet Up" strategy.
 
 Usage:
@@ -12,6 +12,7 @@ import io
 import json
 import sys
 import tarfile
+from datetime import UTC, datetime
 
 import requests
 
@@ -20,27 +21,33 @@ DATE = sys.argv[2] if len(sys.argv) > 2 else "2026-02-25"
 
 
 def main():
-    url = f"{BASE_URL}/archives/btc-updown-5m/{DATE}.tar.gz"
-    print(f"Downloading {url}")
-    resp = requests.get(url)
+    # Convert date to epoch range
+    dt = datetime.strptime(DATE, "%Y-%m-%d").replace(tzinfo=UTC)
+    day_start = int(dt.timestamp())
+    day_end = day_start + 86400 - 300  # last interval of the day
+
+    # Get archive list for the day
+    list_url = f"{BASE_URL}/btc-updown-5m/?from={day_start}&to={day_end}"
+    print(f"Fetching archive list: {list_url}")
+    resp = requests.get(list_url, headers={"Accept": "application/gzip"})
     resp.raise_for_status()
-
-    archive = tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz")
-
-    # Group files by interval epoch
-    intervals: dict[str, dict[str, bytes]] = {}
-    for member in archive.getmembers():
-        if not member.isfile():
-            continue
-        parts = member.name.split("/")
-        epoch = parts[1]
-        filename = "/".join(parts[2:])
-        intervals.setdefault(epoch, {})[filename] = archive.extractfile(member).read()
+    archive_list = resp.json()["archives"]
+    print(f"Found {len(archive_list)} intervals")
 
     results = []
 
-    for epoch in sorted(intervals):
-        files = intervals[epoch]
+    for entry in archive_list:
+        epoch = entry["epoch"]
+        archive_url = f"{BASE_URL}{entry['url']}"
+        resp = requests.get(archive_url)
+        resp.raise_for_status()
+
+        archive = tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz")
+        files = {
+            m.name: archive.extractfile(m).read()
+            for m in archive.getmembers()
+            if m.isfile()
+        }
 
         event = json.loads(files.get("event.json", "{}"))
         if not event:
@@ -51,7 +58,7 @@ def main():
             continue
 
         events = []
-        for key in ("raw/chainlink.jsonl", "raw/binance.jsonl", "raw/market.jsonl"):
+        for key in ("chainlink.jsonl", "binance.jsonl", "market.jsonl"):
             raw = files.get(key, b"")
             for line in raw.decode().strip().split("\n"):
                 if line:
