@@ -1,5 +1,5 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import worker from "./index";
 
 function request(path: string, headers: Record<string, string> = {}) {
@@ -28,8 +28,18 @@ describe("CORS", () => {
   });
 });
 
+describe("HEAD requests", () => {
+  it("responds to HEAD requests", async () => {
+    const req = new Request("https://polyticker.example.com/", { method: "HEAD" });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(req, env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("JSON errors", () => {
-  it("returns JSON 405 for non-GET methods", async () => {
+  it("returns JSON 405 for non-GET/HEAD methods", async () => {
     const req = new Request("https://polyticker.example.com/", { method: "POST" });
     const ctx = createExecutionContext();
     const res = await worker.fetch(req, env, ctx);
@@ -38,6 +48,7 @@ describe("JSON errors", () => {
     expect(res.headers.get("Content-Type")).toBe("application/json");
     const body = await res.json() as { error: string; message: string; status: number };
     expect(body.error).toBe("method_not_allowed");
+    expect(body.message).toBe("Only GET and HEAD requests are supported");
     expect(body.status).toBe(405);
   });
 
@@ -138,5 +149,83 @@ describe("file serving", () => {
     expect(res.headers.get("Cache-Control")).toBe("public, max-age=86400");
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
     expect(await res.json()).toEqual({ hello: "world" });
+  });
+});
+
+describe("archive endpoints", () => {
+  beforeEach(async () => {
+    await env.BUCKET.put("archives/btc-updown-5m/2025-02-24.tar.gz", "fake-archive-24");
+    await env.BUCKET.put("archives/btc-updown-5m/2025-02-25.tar.gz", "fake-archive-25");
+    await env.BUCKET.put("archives/btc-updown-5m/2025-02-26.tar.gz", "fake-archive-26");
+  });
+
+  it("GET /archives/ lists markets with archives", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(request("/archives/"), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/json");
+    const body = await res.json() as { path: string; directories: { name: string }[] };
+    expect(body.path).toBe("/archives/");
+    expect(body.directories).toContainEqual(
+      expect.objectContaining({ name: "btc-updown-5m" })
+    );
+  });
+
+  it("GET /archives/btc-updown-5m/ lists all daily archives", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(request("/archives/btc-updown-5m/"), env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      path: string;
+      archives: { name: string; path: string; date: string; size: number }[];
+    };
+    expect(body.path).toBe("/archives/btc-updown-5m/");
+    expect(body.archives).toHaveLength(3);
+    expect(body.archives[0]).toMatchObject({
+      name: "2025-02-24.tar.gz",
+      date: "2025-02-24",
+    });
+  });
+
+  it("filters archives by date range with from/to params", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/archives/btc-updown-5m/?from=2025-02-25&to=2025-02-25"),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    const body = await res.json() as { archives: { date: string }[] };
+    expect(body.archives).toHaveLength(1);
+    expect(body.archives[0].date).toBe("2025-02-25");
+  });
+
+  it("serves archive files with correct headers", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/archives/btc-updown-5m/2025-02-25.tar.gz"),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/gzip");
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    // Consume the body to avoid isolated storage issues
+    await res.arrayBuffer();
+  });
+
+  it("returns 404 for missing archives", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/archives/btc-updown-5m/2020-01-01.tar.gz"),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(404);
   });
 });
