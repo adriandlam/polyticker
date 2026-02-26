@@ -1,4 +1,4 @@
-import { buildDirectoryTarGz } from "./bulk";
+import { handleArchiveRequest } from "./bulk";
 
 interface Env {
   BUCKET: R2Bucket;
@@ -16,7 +16,7 @@ export default {
     // Directory listing
     if (path === "" || path.endsWith("/")) {
       if (wantsGzip(request)) {
-        return cors(await buildDirectoryTarGz(url, env.BUCKET, path));
+        return cors(await handleArchiveRequest(url, env.BUCKET, path));
       }
       const data = await listDirectoryData(env.BUCKET, path);
       if (wantsHtml(request)) {

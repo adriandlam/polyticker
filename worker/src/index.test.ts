@@ -161,9 +161,12 @@ describe("tar.gz content negotiation", () => {
     await env.BUCKET.put(`${prefix}/1740441900/meta.json`, '{"complete":true}');
     await env.BUCKET.put(`${prefix}/1740442200/event.json`, '{"test":3}');
     await env.BUCKET.put(`${prefix}/1740442200/meta.json`, '{"complete":true}');
+    await env.BUCKET.put(`${prefix}/archives/1740441600.tar.gz`, "archive-1");
+    await env.BUCKET.put(`${prefix}/archives/1740441900.tar.gz`, "archive-2");
+    await env.BUCKET.put(`${prefix}/archives/1740442200.tar.gz`, "archive-3");
   });
 
-  it("returns tar.gz with correct headers when Accept: application/gzip", async () => {
+  it("returns JSON archive list when Accept: application/gzip with no from/to", async () => {
     const ctx = createExecutionContext();
     const res = await worker.fetch(
       request("/btc-updown-5m/", { Accept: "application/gzip" }),
@@ -172,20 +175,17 @@ describe("tar.gz content negotiation", () => {
     );
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(200);
-    expect(res.headers.get("Content-Type")).toBe("application/gzip");
-    expect(res.headers.get("Content-Disposition")).toBe(
-      'attachment; filename="btc-updown-5m.tar.gz"'
-    );
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=86400");
+    expect(res.headers.get("Content-Type")).toBe("application/json");
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
-
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    // gzip magic bytes
-    expect(bytes[0]).toBe(0x1f);
-    expect(bytes[1]).toBe(0x8b);
+    const body = await res.json() as { archives: { epoch: number; url: string }[] };
+    expect(body.archives).toHaveLength(3);
+    expect(body.archives[0]).toEqual({
+      epoch: 1740441600,
+      url: "/btc-updown-5m/archives/1740441600.tar.gz",
+    });
   });
 
-  it("returns filtered tar.gz with from/to query params", async () => {
+  it("returns JSON archive list for from/to range", async () => {
     const ctx = createExecutionContext();
     const res = await worker.fetch(
       request("/btc-updown-5m/?from=1740441600&to=1740441900", {
@@ -196,25 +196,41 @@ describe("tar.gz content negotiation", () => {
     );
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(200);
-    expect(res.headers.get("Content-Type")).toBe("application/gzip");
-    expect(res.headers.get("Content-Disposition")).toBe(
-      'attachment; filename="btc-updown-5m_1740441600_1740441900.tar.gz"'
-    );
-
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    expect(bytes[0]).toBe(0x1f);
-    expect(bytes[1]).toBe(0x8b);
+    expect(res.headers.get("Content-Type")).toBe("application/json");
+    const body = await res.json() as { archives: { epoch: number; url: string }[] };
+    expect(body.archives).toHaveLength(2);
   });
 
-  it("returns 413 when more than 288 intervals", async () => {
+  it("serves single archive directly when from === to", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/btc-updown-5m/?from=1740441600&to=1740441600", {
+        Accept: "application/gzip",
+      }),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/gzip");
+    expect(res.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="1740441600.tar.gz"'
+    );
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(await res.text()).toBe("archive-1");
+  });
+
+  it("returns 413 when more than 288 archives", async () => {
     for (let i = 0; i < 289; i++) {
       const epoch = 1700000000 + i * 300;
-      await env.BUCKET.put(`btc-updown-5m/${epoch}/event.json`, "{}");
+      await env.BUCKET.put(`btc-updown-5m/archives/${epoch}.tar.gz`, "x");
     }
 
     const ctx = createExecutionContext();
     const res = await worker.fetch(
-      request("/btc-updown-5m/", { Accept: "application/gzip" }),
+      request("/btc-updown-5m/?from=1700000000&to=" + String(1700000000 + 288 * 300), {
+        Accept: "application/gzip",
+      }),
       env,
       ctx
     );
@@ -284,24 +300,5 @@ describe("tar.gz content negotiation", () => {
     );
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(400);
-  });
-
-  it("returns tar.gz for a single interval directory", async () => {
-    const ctx = createExecutionContext();
-    const res = await worker.fetch(
-      request("/btc-updown-5m/1740441600/", { Accept: "application/gzip" }),
-      env,
-      ctx
-    );
-    await waitOnExecutionContext(ctx);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("Content-Type")).toBe("application/gzip");
-    expect(res.headers.get("Content-Disposition")).toBe(
-      'attachment; filename="btc-updown-5m-1740441600.tar.gz"'
-    );
-
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    expect(bytes[0]).toBe(0x1f);
-    expect(bytes[1]).toBe(0x8b);
   });
 });
