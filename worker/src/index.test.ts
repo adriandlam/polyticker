@@ -275,7 +275,7 @@ describe("tar.gz content negotiation", () => {
     expect(body.path).toBe("/btc-updown-5m/");
   });
 
-  it("returns 400 when only from is provided", async () => {
+  it("returns archives when only from is provided", async () => {
     const ctx = createExecutionContext();
     const res = await worker.fetch(
       request("/btc-updown-5m/?from=1740441600", {
@@ -285,7 +285,7 @@ describe("tar.gz content negotiation", () => {
       ctx
     );
     await waitOnExecutionContext(ctx);
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
   });
 
   it("returns 400 when from > to", async () => {

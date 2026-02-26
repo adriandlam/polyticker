@@ -4,8 +4,8 @@ const MAX_ARCHIVES = 288;
  * Handle requests for pre-built archives stored in R2.
  *
  * - Single interval (from === to): serve the archive directly from R2
- * - Range (from < to) or no params: return JSON list of archive URLs
- * - Enforces a maximum of 288 archives per request
+ * - Range (from/to), open-ended (from only), or no params: return JSON list
+ * - Enforces a maximum of 288 archives for bounded range queries (from+to)
  */
 export async function handleArchiveRequest(
   url: URL,
@@ -15,25 +15,30 @@ export async function handleArchiveRequest(
   const fromStr = url.searchParams.get("from");
   const toStr = url.searchParams.get("to");
 
-  // If either from or to is provided, both must be present
-  if ((fromStr == null) !== (toStr == null)) {
-    return jsonError("bad_request", "Both 'from' and 'to' query parameters are required when filtering by range", 400);
+  // 'to' requires 'from'
+  if (toStr != null && fromStr == null) {
+    return jsonError("bad_request", "'from' is required when 'to' is specified", 400);
   }
 
   let from: number | null = null;
   let to: number | null = null;
 
-  if (fromStr != null && toStr != null) {
+  if (fromStr != null) {
     from = Number(fromStr);
+    if (isNaN(from) || !Number.isInteger(from)) {
+      return jsonError("bad_request", "'from' must be an integer epoch timestamp", 400);
+    }
+  }
+
+  if (toStr != null) {
     to = Number(toStr);
-
-    if (isNaN(from) || isNaN(to) || !Number.isInteger(from) || !Number.isInteger(to)) {
-      return jsonError("bad_request", "'from' and 'to' must be integer epoch timestamps", 400);
+    if (isNaN(to) || !Number.isInteger(to)) {
+      return jsonError("bad_request", "'to' must be an integer epoch timestamp", 400);
     }
+  }
 
-    if (from > to) {
-      return jsonError("bad_request", "'from' must be less than or equal to 'to'", 400);
-    }
+  if (from !== null && to !== null && from > to) {
+    return jsonError("bad_request", "'from' must be less than or equal to 'to'", 400);
   }
 
   // Strip trailing slash from prefix for consistent key construction
@@ -79,15 +84,17 @@ export async function handleArchiveRequest(
     .filter((a): a is { epoch: number; key: string; size: number } => a !== null);
 
   // Apply range filter if provided
-  if (from !== null && to !== null) {
-    archives = archives.filter((a) => a.epoch >= from! && a.epoch <= to!);
+  if (from !== null || to !== null) {
+    archives = archives.filter(
+      (a) => (from === null || a.epoch >= from) && (to === null || a.epoch <= to)
+    );
   }
 
   if (archives.length === 0) {
     return jsonError("not_found", "No archives found in the specified range", 404);
   }
 
-  if (archives.length > MAX_ARCHIVES) {
+  if (from !== null && to !== null && archives.length > MAX_ARCHIVES) {
     return jsonError(
       "range_too_large",
       `Range contains ${archives.length} archives, max is ${MAX_ARCHIVES}. Narrow your from/to range.`,

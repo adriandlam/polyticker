@@ -15,10 +15,14 @@ describe("handleArchiveRequest", () => {
     await env.BUCKET.put("btc-updown-5m/1740442200.tar.gz", "fake-archive-3");
   });
 
-  it("returns 400 when only from is provided", async () => {
+  it("returns archives when only from is provided", async () => {
     const url = makeUrl("/btc-updown-5m/", { from: "1740441600" });
     const res = await handleArchiveRequest(url, env.BUCKET, "btc-updown-5m/");
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { archives: { epoch: number }[] };
+    for (const a of body.archives) {
+      expect(a.epoch).toBeGreaterThanOrEqual(1740441600);
+    }
   });
 
   it("returns 400 when only to is provided", async () => {
