@@ -38,7 +38,7 @@ export async function handleArchiveRequest(
 
   // Strip trailing slash from prefix for consistent key construction
   const market = prefix.replace(/\/$/, "");
-  const archivePrefix = `${market}/archives/`;
+  const archivePrefix = `${market}/`;
 
   // Single interval: serve archive directly
   if (from !== null && to !== null && from === to) {
@@ -58,25 +58,25 @@ export async function handleArchiveRequest(
   }
 
   // Range or no params: list archives
-  const allKeys: string[] = [];
+  const allObjects: { key: string; size: number }[] = [];
   let cursor: string | undefined;
   do {
     const listed = await bucket.list({ prefix: archivePrefix, cursor });
     for (const obj of listed.objects) {
-      allKeys.push(obj.key);
+      allObjects.push({ key: obj.key, size: obj.size });
     }
     cursor = listed.truncated ? listed.cursor : undefined;
   } while (cursor);
 
   // Filter to only .tar.gz files and extract epochs
-  let archives = allKeys
-    .map((key) => {
+  let archives = allObjects
+    .map(({ key, size }) => {
       const filename = key.slice(archivePrefix.length);
       const match = filename.match(/^(\d+)\.tar\.gz$/);
       if (!match) return null;
-      return { epoch: parseInt(match[1], 10), key };
+      return { epoch: parseInt(match[1], 10), key, size };
     })
-    .filter((a): a is { epoch: number; key: string } => a !== null);
+    .filter((a): a is { epoch: number; key: string; size: number } => a !== null);
 
   // Apply range filter if provided
   if (from !== null && to !== null) {
@@ -101,7 +101,8 @@ export async function handleArchiveRequest(
   const body = {
     archives: archives.map((a) => ({
       epoch: a.epoch,
-      url: `/${market}/archives/${a.epoch}.tar.gz`,
+      url: `/${market}/${a.epoch}.tar.gz`,
+      size: a.size,
     })),
   };
 

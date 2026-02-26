@@ -10,9 +10,9 @@ function makeUrl(path: string, params: Record<string, string> = {}) {
 
 describe("handleArchiveRequest", () => {
   beforeEach(async () => {
-    await env.BUCKET.put("btc-updown-5m/archives/1740441600.tar.gz", "fake-archive-1");
-    await env.BUCKET.put("btc-updown-5m/archives/1740441900.tar.gz", "fake-archive-2");
-    await env.BUCKET.put("btc-updown-5m/archives/1740442200.tar.gz", "fake-archive-3");
+    await env.BUCKET.put("btc-updown-5m/1740441600.tar.gz", "fake-archive-1");
+    await env.BUCKET.put("btc-updown-5m/1740441900.tar.gz", "fake-archive-2");
+    await env.BUCKET.put("btc-updown-5m/1740442200.tar.gz", "fake-archive-3");
   });
 
   it("returns 400 when only from is provided", async () => {
@@ -61,15 +61,18 @@ describe("handleArchiveRequest", () => {
     const res = await handleArchiveRequest(url, env.BUCKET, "btc-updown-5m/");
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("application/json");
-    const body = await res.json() as { archives: { epoch: number; url: string }[] };
+    const body = await res.json() as { archives: { epoch: number; url: string; size: number }[] };
     expect(body.archives).toHaveLength(3);
     expect(body.archives[0]).toEqual({
       epoch: 1740441600,
-      url: "/btc-updown-5m/archives/1740441600.tar.gz",
+      url: "/btc-updown-5m/1740441600.tar.gz",
+      size: expect.any(Number),
     });
+    expect(body.archives[0].size).toBeGreaterThan(0);
     expect(body.archives[2]).toEqual({
       epoch: 1740442200,
-      url: "/btc-updown-5m/archives/1740442200.tar.gz",
+      url: "/btc-updown-5m/1740442200.tar.gz",
+      size: expect.any(Number),
     });
   });
 
@@ -82,7 +85,7 @@ describe("handleArchiveRequest", () => {
   it("returns 413 when range exceeds 288 intervals", async () => {
     for (let i = 0; i < 289; i++) {
       const epoch = 1700000000 + i * 300;
-      await env.BUCKET.put(`btc-updown-5m/archives/${epoch}.tar.gz`, "x");
+      await env.BUCKET.put(`btc-updown-5m/${epoch}.tar.gz`, "x");
     }
     const url = makeUrl("/btc-updown-5m/", { from: "1700000000", to: String(1700000000 + 288 * 300) });
     const res = await handleArchiveRequest(url, env.BUCKET, "btc-updown-5m/");
@@ -93,7 +96,10 @@ describe("handleArchiveRequest", () => {
     const url = makeUrl("/btc-updown-5m/");
     const res = await handleArchiveRequest(url, env.BUCKET, "btc-updown-5m/");
     expect(res.status).toBe(200);
-    const body = await res.json() as { archives: { epoch: number; url: string }[] };
+    const body = await res.json() as { archives: { epoch: number; url: string; size: number }[] };
     expect(body.archives).toHaveLength(3);
+    for (const archive of body.archives) {
+      expect(archive.size).toBeGreaterThan(0);
+    }
   });
 });

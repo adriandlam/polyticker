@@ -155,15 +155,12 @@ describe("file serving", () => {
 describe("tar.gz content negotiation", () => {
   beforeEach(async () => {
     const prefix = "btc-updown-5m";
-    await env.BUCKET.put(`${prefix}/1740441600/event.json`, '{"test":1}');
-    await env.BUCKET.put(`${prefix}/1740441600/meta.json`, '{"complete":true}');
-    await env.BUCKET.put(`${prefix}/1740441900/event.json`, '{"test":2}');
-    await env.BUCKET.put(`${prefix}/1740441900/meta.json`, '{"complete":true}');
-    await env.BUCKET.put(`${prefix}/1740442200/event.json`, '{"test":3}');
-    await env.BUCKET.put(`${prefix}/1740442200/meta.json`, '{"complete":true}');
-    await env.BUCKET.put(`${prefix}/archives/1740441600.tar.gz`, "archive-1");
-    await env.BUCKET.put(`${prefix}/archives/1740441900.tar.gz`, "archive-2");
-    await env.BUCKET.put(`${prefix}/archives/1740442200.tar.gz`, "archive-3");
+    await env.BUCKET.put(`${prefix}/1740441600.tar.gz`, "archive-1");
+    await env.BUCKET.put(`${prefix}/1740441600.meta.json`, '{"complete":true}');
+    await env.BUCKET.put(`${prefix}/1740441900.tar.gz`, "archive-2");
+    await env.BUCKET.put(`${prefix}/1740441900.meta.json`, '{"complete":true}');
+    await env.BUCKET.put(`${prefix}/1740442200.tar.gz`, "archive-3");
+    await env.BUCKET.put(`${prefix}/1740442200.meta.json`, '{"complete":true}');
   });
 
   it("returns JSON archive list when Accept: application/gzip with no from/to", async () => {
@@ -177,12 +174,14 @@ describe("tar.gz content negotiation", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("application/json");
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
-    const body = await res.json() as { archives: { epoch: number; url: string }[] };
+    const body = await res.json() as { archives: { epoch: number; url: string; size: number }[] };
     expect(body.archives).toHaveLength(3);
     expect(body.archives[0]).toEqual({
       epoch: 1740441600,
-      url: "/btc-updown-5m/archives/1740441600.tar.gz",
+      url: "/btc-updown-5m/1740441600.tar.gz",
+      size: expect.any(Number),
     });
+    expect(body.archives[0].size).toBeGreaterThan(0);
   });
 
   it("returns JSON archive list for from/to range", async () => {
@@ -223,7 +222,7 @@ describe("tar.gz content negotiation", () => {
   it("returns 413 when more than 288 archives", async () => {
     for (let i = 0; i < 289; i++) {
       const epoch = 1700000000 + i * 300;
-      await env.BUCKET.put(`btc-updown-5m/archives/${epoch}.tar.gz`, "x");
+      await env.BUCKET.put(`btc-updown-5m/${epoch}.tar.gz`, "x");
     }
 
     const ctx = createExecutionContext();

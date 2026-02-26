@@ -40,12 +40,8 @@ def test_upload_interval(tmp_path, monkeypatch):
         call.args[2] for call in mock_client.upload_file.call_args_list
     )
     assert uploaded_keys == [
-        "btc-updown-5m/1772000000/event.json",
-        "btc-updown-5m/1772000000/meta.json",
-        "btc-updown-5m/1772000000/raw/binance.jsonl",
-        "btc-updown-5m/1772000000/raw/chainlink.jsonl",
-        "btc-updown-5m/1772000000/raw/market.jsonl",
-        "btc-updown-5m/archives/1772000000.tar.gz",
+        "btc-updown-5m/1772000000.meta.json",
+        "btc-updown-5m/1772000000.tar.gz",
     ]
     assert not market_dir.exists(), "local dir should be deleted after upload"
 
@@ -68,27 +64,8 @@ def test_upload_uses_correct_bucket(tmp_path, monkeypatch):
         assert call.args[1] == "my-bucket"
 
 
-def test_upload_interval_creates_archive(tmp_path, monkeypatch):
-    """Verify the archive key appears in the uploaded files."""
-    monkeypatch.setenv("R2_ENDPOINT", "https://fake.r2.dev")
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "test-key")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "test-secret")
-    monkeypatch.setenv("R2_BUCKET", "test-bucket")
-
-    mock_client = MagicMock()
-    monkeypatch.setattr("storage.boto3.client", lambda *a, **kw: mock_client)
-
-    r2 = R2()
-    data_dir, market_dir = _make_interval(tmp_path)
-
-    r2.upload_interval(market_dir, data_dir)
-
-    uploaded_keys = [call.args[2] for call in mock_client.upload_file.call_args_list]
-    assert "btc-updown-5m/archives/1772000000.tar.gz" in uploaded_keys
-
-
 def test_archive_contains_all_files(tmp_path, monkeypatch):
-    """Capture the uploaded archive and verify it contains flattened file names."""
+    """Verify archive contains flattened file names (no meta.json)."""
     monkeypatch.setenv("R2_ENDPOINT", "https://fake.r2.dev")
     monkeypatch.setenv("R2_ACCESS_KEY_ID", "test-key")
     monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "test-secret")
@@ -126,5 +103,4 @@ def test_archive_contains_all_files(tmp_path, monkeypatch):
         "chainlink.jsonl",
         "event.json",
         "market.jsonl",
-        "meta.json",
     ]
