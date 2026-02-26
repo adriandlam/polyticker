@@ -1,41 +1,4 @@
-interface TarEntry {
-  name: string;
-  data: Uint8Array;
-}
-
-export async function createTarGz(entries: TarEntry[]): Promise<Blob> {
-  const tarBytes = buildTar(entries);
-  const blob = new Blob([tarBytes]);
-  const compressed = blob.stream().pipeThrough(new CompressionStream("gzip"));
-  return new Response(compressed).blob();
-}
-
-function buildTar(entries: TarEntry[]): Uint8Array {
-  const blocks: Uint8Array[] = [];
-
-  for (const entry of entries) {
-    blocks.push(tarHeader(entry.name, entry.data.length));
-    blocks.push(entry.data);
-    const remainder = entry.data.length % 512;
-    if (remainder > 0) {
-      blocks.push(new Uint8Array(512 - remainder));
-    }
-  }
-
-  // End-of-archive: two 512-byte zero blocks
-  blocks.push(new Uint8Array(1024));
-
-  const total = blocks.reduce((sum, b) => sum + b.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const block of blocks) {
-    result.set(block, offset);
-    offset += block.length;
-  }
-  return result;
-}
-
-function tarHeader(name: string, size: number): Uint8Array {
+export function tarHeader(name: string, size: number): Uint8Array {
   const header = new Uint8Array(512);
 
   // File name (0-99, 100 bytes)

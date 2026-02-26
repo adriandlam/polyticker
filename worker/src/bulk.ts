@@ -1,22 +1,16 @@
-import { createTarGz } from "./tar";
+import { tarHeader } from "./tar";
 
 const MAX_INTERVALS = 288;
 
-interface TarEntry {
-  name: string;
-  data: Uint8Array;
-}
-
 /**
- * Build a tar.gz archive of all files under the given R2 prefix.
+ * Build a streaming tar.gz archive of all files under the given R2 prefix.
+ *
+ * Files are streamed one at a time through a tar encoder → gzip compressor,
+ * so peak memory is O(largest single file) rather than O(all files).
  *
  * Sub-directories whose names parse as integers are treated as "intervals".
  * Optional `from` / `to` query-params (integer epoch seconds) filter which
  * intervals are included.  A maximum of 288 intervals is enforced.
- *
- * @param url       The incoming request URL (used to read `from` / `to` query params)
- * @param bucket    R2 bucket
- * @param prefix    Directory prefix including trailing slash, e.g. `btc-updown-5m/`
  */
 export async function buildDirectoryTarGz(
   url: URL,
@@ -65,8 +59,6 @@ export async function buildDirectoryTarGz(
     return subDir !== undefined && /^\d+$/.test(subDir);
   });
 
-  const entries: TarEntry[] = [];
-
   if (intervalPrefixes.length > 0) {
     // Interval mode: directory contains numeric sub-dirs (e.g. btc-updown-5m/)
     if (from !== null && to !== null) {
@@ -89,56 +81,97 @@ export async function buildDirectoryTarGz(
       );
     }
 
-    for (const intervalPrefix of intervalPrefixes) {
-      let cursor: string | undefined;
-      do {
-        const result = await bucket.list({ prefix: intervalPrefix, cursor });
-        for (const obj of result.objects) {
-          const body = await bucket.get(obj.key);
-          if (!body) continue;
-          const data = new Uint8Array(await body.arrayBuffer());
-          entries.push({ name: obj.key.slice(prefix.length), data });
-        }
-        cursor = result.truncated ? result.cursor : undefined;
-      } while (cursor);
-    }
-  } else {
-    // Direct mode: directory has no numeric sub-dirs (e.g. btc-updown-5m/1740441600/)
-    // Tar all files under this prefix directly
-    let cursor: string | undefined;
-    do {
-      const result = await bucket.list({ prefix, cursor });
-      for (const obj of result.objects) {
-        const body = await bucket.get(obj.key);
-        if (!body) continue;
-        const data = new Uint8Array(await body.arrayBuffer());
-        entries.push({ name: obj.key.slice(prefix.length), data });
-      }
-      cursor = result.truncated ? result.cursor : undefined;
-    } while (cursor);
+    return streamTarGz(bucket, prefix, intervalPrefixes, from, to);
   }
 
-  if (entries.length === 0) {
+  // Direct mode: directory has no numeric sub-dirs (e.g. btc-updown-5m/1740441600/)
+  // Check that files actually exist before starting the stream
+  const probe = await bucket.list({ prefix, limit: 1 });
+  if (probe.objects.length === 0) {
     return jsonError("not_found", "No files found in matching intervals", 404);
   }
 
-  const archive = await createTarGz(entries);
+  return streamTarGz(bucket, prefix, [prefix], from, to);
+}
 
-  // Build filename: use prefix name (replacing slashes with dashes), optionally with range
+/**
+ * Stream tar entries from R2 through gzip compression.
+ * Each file is fetched, written to the tar stream, then released from memory.
+ */
+function streamTarGz(
+  bucket: R2Bucket,
+  prefix: string,
+  prefixes: string[],
+  from: number | null,
+  to: number | null
+): Response {
+  const { readable, writable } = new TransformStream<Uint8Array>();
+
+  // Build filename
   const pathLabel = prefix.replace(/\/$/, "").replace(/\//g, "-");
   const filename = from !== null && to !== null
     ? `${pathLabel}_${from}_${to}.tar.gz`
     : `${pathLabel}.tar.gz`;
 
-  return new Response(archive, {
+  // Kick off async tar generation (runs in background, writes to stream)
+  const writePromise = writeTarEntries(bucket, prefix, prefixes, writable);
+
+  // Pipe the raw tar stream through gzip compression
+  const compressed = readable.pipeThrough(new CompressionStream("gzip"));
+
+  // Attach error handler so unhandled rejection doesn't crash the worker
+  writePromise.catch(() => {});
+
+  return new Response(compressed, {
     headers: {
       "Content-Type": "application/gzip",
       "Content-Disposition": `attachment; filename="${filename}"`,
-      "Content-Length": archive.size.toString(),
       "Cache-Control": "public, max-age=86400",
       "Access-Control-Allow-Origin": "*",
     },
   });
+}
+
+async function writeTarEntries(
+  bucket: R2Bucket,
+  prefix: string,
+  prefixes: string[],
+  writable: WritableStream<Uint8Array>
+): Promise<void> {
+  const writer = writable.getWriter();
+  try {
+    for (const p of prefixes) {
+      let cursor: string | undefined;
+      do {
+        const result = await bucket.list({ prefix: p, cursor });
+        for (const obj of result.objects) {
+          const body = await bucket.get(obj.key);
+          if (!body) continue;
+          const name = obj.key.slice(prefix.length);
+          // Write tar header using size from R2 metadata
+          await writer.write(tarHeader(name, obj.size));
+          // Stream body in chunks — never hold entire file in memory
+          const reader = body.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            await writer.write(value);
+          }
+          // Pad to 512-byte boundary
+          const remainder = obj.size % 512;
+          if (remainder > 0) {
+            await writer.write(new Uint8Array(512 - remainder));
+          }
+        }
+        cursor = result.truncated ? result.cursor : undefined;
+      } while (cursor);
+    }
+    // End-of-archive: two 512-byte zero blocks
+    await writer.write(new Uint8Array(1024));
+    await writer.close();
+  } catch (e) {
+    await writer.abort(e);
+  }
 }
 
 function jsonError(error: string, message: string, status: number): Response {
