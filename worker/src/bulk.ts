@@ -47,13 +47,19 @@ export async function buildDirectoryTarGz(
     }
   }
 
-  // List all sub-directory prefixes under the given prefix
-  const listed = await bucket.list({ prefix, delimiter: "/" });
+  // List all sub-directory prefixes under the given prefix (paginated)
+  const allDelimitedPrefixes: string[] = [];
+  let listCursor: string | undefined;
+  do {
+    const listed = await bucket.list({ prefix, delimiter: "/", cursor: listCursor });
+    allDelimitedPrefixes.push(...(listed.delimitedPrefixes || []));
+    listCursor = listed.truncated ? listed.cursor : undefined;
+  } while (listCursor);
 
   // Determine the depth of the prefix so we can extract the sub-directory name
   const prefixParts = prefix.split("/").filter(Boolean);
 
-  let prefixes = (listed.delimitedPrefixes || []).filter((p) => {
+  let prefixes = allDelimitedPrefixes.filter((p) => {
     const parts = p.split("/").filter(Boolean);
     const subDir = parts[prefixParts.length];
     return subDir !== undefined && /^\d+$/.test(subDir);
