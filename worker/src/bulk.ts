@@ -147,11 +147,18 @@ async function writeTarEntries(
         for (const obj of result.objects) {
           const body = await bucket.get(obj.key);
           if (!body) continue;
-          const data = new Uint8Array(await body.arrayBuffer());
           const name = obj.key.slice(prefix.length);
-          await writer.write(tarHeader(name, data.length));
-          await writer.write(data);
-          const remainder = data.length % 512;
+          // Write tar header using size from R2 metadata
+          await writer.write(tarHeader(name, obj.size));
+          // Stream body in chunks — never hold entire file in memory
+          const reader = body.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            await writer.write(value);
+          }
+          // Pad to 512-byte boundary
+          const remainder = obj.size % 512;
           if (remainder > 0) {
             await writer.write(new Uint8Array(512 - remainder));
           }
