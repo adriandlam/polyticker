@@ -16,6 +16,7 @@ class R2:
             endpoint_url=os.environ["R2_ENDPOINT"],
             aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
             aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+            region_name="auto",
         )
         self.bucket = os.environ.get("R2_BUCKET", "polyticker")
 
