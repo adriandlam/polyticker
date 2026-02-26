@@ -59,47 +59,60 @@ export async function buildDirectoryTarGz(
   // Determine the depth of the prefix so we can extract the sub-directory name
   const prefixParts = prefix.split("/").filter(Boolean);
 
-  let prefixes = allDelimitedPrefixes.filter((p) => {
+  let intervalPrefixes = allDelimitedPrefixes.filter((p) => {
     const parts = p.split("/").filter(Boolean);
     const subDir = parts[prefixParts.length];
     return subDir !== undefined && /^\d+$/.test(subDir);
   });
 
-  // Apply epoch filter if from/to are provided
-  if (from !== null && to !== null) {
-    prefixes = prefixes.filter((p) => {
-      const parts = p.split("/").filter(Boolean);
-      const epoch = parseInt(parts[prefixParts.length], 10);
-      return epoch >= from! && epoch <= to!;
-    });
-  }
-
-  if (prefixes.length === 0) {
-    return jsonError("not_found", "No intervals found in the specified range", 404);
-  }
-
-  if (prefixes.length > MAX_INTERVALS) {
-    return jsonError(
-      "range_too_large",
-      `Range contains ${prefixes.length} intervals, max is ${MAX_INTERVALS}. Narrow your from/to range.`,
-      413
-    );
-  }
-
-  // Collect all files for matching intervals
   const entries: TarEntry[] = [];
 
-  for (const intervalPrefix of prefixes) {
+  if (intervalPrefixes.length > 0) {
+    // Interval mode: directory contains numeric sub-dirs (e.g. btc-updown-5m/)
+    if (from !== null && to !== null) {
+      intervalPrefixes = intervalPrefixes.filter((p) => {
+        const parts = p.split("/").filter(Boolean);
+        const epoch = parseInt(parts[prefixParts.length], 10);
+        return epoch >= from! && epoch <= to!;
+      });
+    }
+
+    if (intervalPrefixes.length === 0) {
+      return jsonError("not_found", "No intervals found in the specified range", 404);
+    }
+
+    if (intervalPrefixes.length > MAX_INTERVALS) {
+      return jsonError(
+        "range_too_large",
+        `Range contains ${intervalPrefixes.length} intervals, max is ${MAX_INTERVALS}. Narrow your from/to range.`,
+        413
+      );
+    }
+
+    for (const intervalPrefix of intervalPrefixes) {
+      let cursor: string | undefined;
+      do {
+        const result = await bucket.list({ prefix: intervalPrefix, cursor });
+        for (const obj of result.objects) {
+          const body = await bucket.get(obj.key);
+          if (!body) continue;
+          const data = new Uint8Array(await body.arrayBuffer());
+          entries.push({ name: obj.key.slice(prefix.length), data });
+        }
+        cursor = result.truncated ? result.cursor : undefined;
+      } while (cursor);
+    }
+  } else {
+    // Direct mode: directory has no numeric sub-dirs (e.g. btc-updown-5m/1740441600/)
+    // Tar all files under this prefix directly
     let cursor: string | undefined;
     do {
-      const result = await bucket.list({ prefix: intervalPrefix, cursor });
+      const result = await bucket.list({ prefix, cursor });
       for (const obj of result.objects) {
         const body = await bucket.get(obj.key);
         if (!body) continue;
         const data = new Uint8Array(await body.arrayBuffer());
-        // Relative path strips the requested prefix
-        const relativePath = obj.key.slice(prefix.length);
-        entries.push({ name: relativePath, data });
+        entries.push({ name: obj.key.slice(prefix.length), data });
       }
       cursor = result.truncated ? result.cursor : undefined;
     } while (cursor);

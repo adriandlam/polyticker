@@ -285,4 +285,23 @@ describe("tar.gz content negotiation", () => {
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(400);
   });
+
+  it("returns tar.gz for a single interval directory", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      request("/btc-updown-5m/1740441600/", { Accept: "application/gzip" }),
+      env,
+      ctx
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/gzip");
+    expect(res.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="btc-updown-5m-1740441600.tar.gz"'
+    );
+
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes[0]).toBe(0x1f);
+    expect(bytes[1]).toBe(0x8b);
+  });
 });

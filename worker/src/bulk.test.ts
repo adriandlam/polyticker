@@ -115,9 +115,24 @@ describe("buildDirectoryTarGz", () => {
     expect(body.error).toBe("range_too_large");
   });
 
-  it("returns 404 for a prefix with no interval subdirectories", async () => {
+  it("returns 404 for a prefix with no interval subdirectories and no files", async () => {
     const url = makeUrl("/nonexistent/");
     const res = await buildDirectoryTarGz(url, env.BUCKET, "nonexistent/");
     expect(res.status).toBe(404);
+  });
+
+  it("tars all files directly when directory has no numeric sub-dirs", async () => {
+    // Request a single interval directory — sub-dirs are "raw/" (not numeric)
+    const url = makeUrl("/btc-updown-5m/1740441600/");
+    const res = await buildDirectoryTarGz(url, env.BUCKET, "btc-updown-5m/1740441600/");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/gzip");
+    expect(res.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="btc-updown-5m-1740441600.tar.gz"'
+    );
+
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes[0]).toBe(0x1f);
+    expect(bytes[1]).toBe(0x8b);
   });
 });
