@@ -46,23 +46,24 @@ uv run pytest tests/ -v
 
 All raw data is stored as verbatim WebSocket payloads. Folder names are Unix seconds (interval start epoch). Each message has a source `timestamp` field (Unix ms) for chronological ordering.
 
-## Directory structure
+## Data structure
+
+Data is stored in R2 as flat per-interval archives:
 
 ```
-data/btc-updown-5m/
-├── 1771982700/              # epoch from ticker "btc-updown-5m-1771982700"
-│   ├── event.json           # Gamma API event response (write-once)
-│   ├── meta.json            # collection completeness
-│   └── raw/
-│       ├── chainlink.jsonl  # Chainlink oracle ticks (RTDS)
-│       ├── binance.jsonl    # Binance BTC price ticks (RTDS)
-│       └── market.jsonl     # CLOB market channel events
-├── 1771983000/              # next interval (300s later)
-│   └── ...
-└── ...                      # ~288 folders per day
+btc-updown-5m/
+├── 1771982700.tar.gz        # flattened archive for one interval
+├── 1771982700.meta.json     # collection completeness (sidecar)
+├── 1771983000.tar.gz        # next interval (300s later)
+├── 1771983000.meta.json
+└── ...                      # ~288 intervals per day
 ```
 
-Each folder is one market. Self-contained, replayable, deletable.
+Each `.tar.gz` contains (flattened, no subdirectories):
+- `event.json` — Gamma API event response
+- `chainlink.jsonl` — Chainlink oracle ticks (RTDS)
+- `binance.jsonl` — Binance BTC price ticks (RTDS)
+- `market.jsonl` — CLOB market channel events
 
 ## `event.json`
 
@@ -98,7 +99,7 @@ Written at end of each interval. Reports collection health.
 
 `complete` is `true` when both RTDS and Market Channel had zero connection gaps during the interval.
 
-## `raw/chainlink.jsonl`
+## `chainlink.jsonl`
 
 Raw RTDS payloads for Chainlink BTC/USD. **Resolution source of truth** — Polymarket uses Chainlink to determine up/down outcome.
 
@@ -108,7 +109,7 @@ Raw RTDS payloads for Chainlink BTC/USD. **Resolution source of truth** — Poly
 
 Source: RTDS `crypto_prices_chainlink`, filter `btc/usd`.
 
-## `raw/binance.jsonl`
+## `binance.jsonl`
 
 Raw RTDS payloads for Binance BTC/USDT price updates.
 
@@ -120,7 +121,7 @@ Source: RTDS `crypto_prices`, type `update`.
 
 > **Note:** Captures price ticks only (no trades or order book). For richer Binance data, connect directly to Binance WebSocket.
 
-## `raw/market.jsonl`
+## `market.jsonl`
 
 Raw CLOB market channel payloads. All events from market creation through resolution.
 
@@ -144,19 +145,24 @@ Source: `wss://ws-subscriptions-clob.polymarket.com/ws/market` with `custom_feat
 # Replay
 
 ```python
-import json
+import io, json, tarfile
 from pathlib import Path
 
-for folder in sorted(Path("data/btc-updown-5m").iterdir()):
-    if not folder.is_dir():
-        continue
-    meta = json.load(open(folder / "meta.json"))
+for archive in sorted(Path("data/btc-updown-5m").glob("*.tar.gz")):
+    epoch = archive.stem  # e.g. "1771982700"
+    meta_path = archive.with_suffix("").with_suffix(".meta.json")
+    meta = json.loads(meta_path.read_text())
     if not meta["complete"]:
         continue
 
+    tar = tarfile.open(archive, "r:gz")
+    files = {m.name: tar.extractfile(m).read() for m in tar.getmembers() if m.isfile()}
+
     events = []
-    for raw_file in (folder / "raw").glob("*.jsonl"):
-        events.extend(json.loads(line) for line in open(raw_file))
+    for key in ("chainlink.jsonl", "binance.jsonl", "market.jsonl"):
+        for line in files.get(key, b"").decode().strip().split("\n"):
+            if line:
+                events.append(json.loads(line))
     events.sort(key=lambda e: int(e["timestamp"]))
 
     for event in events:

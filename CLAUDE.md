@@ -28,10 +28,24 @@ pnpm test                      # run vitest tests
 - `main.py` — entry point, wires RTDS + Collector + optional R2 upload
 - `websocket.py` — base WebSocket class with reconnect/gap-tracking; RTDS and MarketChannel subclasses
 - `collector.py` — interval loop: fetches Gamma API metadata, records CLOB events, flushes RTDS buffer, writes meta.json
-- `storage.py` — R2 upload via boto3 (S3-compatible), deletes local copy after upload
+- `storage.py` — builds tar.gz archive + meta.json sidecar per interval, uploads to R2, deletes local copy
 - `worker/src/index.ts` — Cloudflare Worker: REST API serving data from R2 bucket
-- `worker/src/bulk.ts` — bulk download endpoint (tar.gz archives)
-- `worker/src/tar.ts` — tar file construction utilities
+- `worker/src/bulk.ts` — archive endpoint: serves pre-built tar.gz from R2 or returns JSON archive listing with sizes
+
+### R2 data structure
+
+```
+btc-updown-5m/
+  {epoch}.tar.gz         # flattened archive (event.json, chainlink.jsonl, binance.jsonl, market.jsonl)
+  {epoch}.meta.json      # sidecar metadata (complete, gaps, collected_at)
+```
+
+### Worker API
+
+- `GET /{market}/` — JSON directory listing (or archive list with `Accept: application/gzip`)
+- `GET /{market}/?from=X&to=Y` — filtered archive list with `Accept: application/gzip`
+- `GET /{market}/{epoch}.tar.gz` — serve individual archive
+- `GET /{market}/{epoch}.meta.json` — serve interval metadata
 
 ## Code style
 
@@ -50,6 +64,10 @@ R2_SECRET_ACCESS_KEY=...
 R2_BUCKET=polyticker
 ```
 
+## Deployment
+
+Collector runs as a systemd service on VPS (`polyticker.service`), with `.env` loaded via `EnvironmentFile`.
+
 ## Gotchas
 
 - `data/` is gitignored — all collected data lives in R2, not the repo
@@ -57,3 +75,4 @@ R2_BUCKET=polyticker
 - Collector sleeps until next 5-minute boundary before starting
 - RTDS buffer is 10 minutes; flush must happen within that window
 - Worker tests use `@cloudflare/vitest-pool-workers` (runs in workerd runtime, not Node)
+- R2 boto3 client requires `region_name="auto"` for list operations
