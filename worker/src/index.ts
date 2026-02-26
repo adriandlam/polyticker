@@ -1,4 +1,5 @@
 import { generateDailyArchive } from "./archive";
+import { buildDirectoryTarGz } from "./bulk";
 
 interface Env {
   BUCKET: R2Bucket;
@@ -75,6 +76,9 @@ export default {
 
     // Directory listing
     if (path === "" || path.endsWith("/")) {
+      if (wantsGzip(request)) {
+        return cors(await buildDirectoryTarGz(url, env.BUCKET, path));
+      }
       const data = await listDirectoryData(env.BUCKET, path);
       if (wantsHtml(request)) {
         return cors(renderHtml(data));
@@ -185,6 +189,11 @@ function renderHtml(data: {
       "Cache-Control": "public, max-age=300",
     },
   });
+}
+
+function wantsGzip(request: Request): boolean {
+  const accept = request.headers.get("Accept") || "";
+  return accept.includes("application/gzip");
 }
 
 function wantsHtml(request: Request): boolean {
